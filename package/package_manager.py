@@ -12,6 +12,37 @@ Features
 NOTE
 ----
 This script DOES NOT perform package upgrades.
+
+Reusable Python package installer utility.
+
+PSEUDOCODE
+----------
+1. Create logging function with timestamp
+
+2. Create helper function to:
+      - execute terminal commands
+      - capture output
+      - raise error if command fails
+
+3. Create function to:
+      - extract package name
+      - extract version/operator if provided
+
+4. Create function to:
+      - install package using pip
+
+5. Create main validation function:
+      - check if package exists
+      - if missing:
+            install package
+      - if version constraint exists:
+            verify installed version
+            install required version if mismatch
+      - otherwise:
+            skip installation
+
+6. Print detailed logs for every step
+
 """
 
 import sys
