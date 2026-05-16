@@ -1,3 +1,21 @@
+"""
+Main script to process package installation.
+
+PSEUDOCODE
+----------
+1. Import utility functions
+
+2. Define package list
+
+3. Upgrade pip before installations
+
+4. Loop through package list
+
+5. Validate/install each package
+
+6. Print completion logs
+"""
+
 from package_manager import (
     ensure_package,
     log,
