@@ -1,0 +1,413 @@
+import importlib.metadata
+import importlib
+import os
+import subprocess
+import sys
+
+# Import tkinter components for GUI popup
+import tkinter as tk
+from tkinter import simpledialog
+
+print("[DEBUG 01] Script initiated. Starting dependency check...")
+
+# ==============================================================================
+# SECTION 1: SYSTEM DEPENDENCY VERIFICATION LOOP
+# ==============================================================================
+
+REQUIRED_PACKAGES = {
+    "pandas": ("pandas", None),
+    "pyodbc": ("pyodbc", None),
+    "sqlalchemy": ("sqlalchemy", None),
+}
+
+
+def verify_and_install_dependencies(packages):
+    print("[DEBUG 02] Inside verify_and_install_dependencies function.")
+
+    missing_or_outdated = []
+
+    for import_name, (pip_name, target_version) in packages.items():
+
+        print(f"[DEBUG 03] Inspecting package: {pip_name}...")
+
+        try:
+            current_version = importlib.metadata.version(pip_name)
+
+            print(
+                f"[DEBUG 04] Found {pip_name} version {current_version} installed."
+            )
+
+            if target_version and current_version != target_version:
+
+                print(f"[DEBUG 05] Version mismatch for '{pip_name}': "
+                      f"Need {target_version}.")
+
+                missing_or_outdated.append(f"{pip_name}=={target_version}")
+
+        except importlib.metadata.PackageNotFoundError:
+
+            print(f"[DEBUG 06] Package '{pip_name}' is completely missing.")
+
+            if target_version:
+                missing_or_outdated.append(f"{pip_name}=={target_version}")
+            else:
+                missing_or_outdated.append(pip_name)
+
+    if missing_or_outdated:
+
+        print("[DEBUG 07] Packages queued for install/update: "
+              f"{missing_or_outdated}")
+
+        try:
+
+            print("[DEBUG 08] Launching pip subprocess...")
+
+            subprocess.check_call([
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                *missing_or_outdated,
+            ])
+
+            print("[DEBUG 09] Pip installation subprocess "
+                  "completed successfully.")
+
+        except subprocess.CalledProcessError as e:
+
+            print("\n[CRITICAL ERROR] Automated pip installation "
+                  f"failed with exit code {e.returncode}.")
+
+            sys.exit(1)
+
+    else:
+
+        print("[DEBUG 10] All dependencies verified and ready.")
+
+
+# Run dependency verification before importing packages
+verify_and_install_dependencies(REQUIRED_PACKAGES)
+
+print("[DEBUG 11] Proceeding to import third-party modules...")
+
+# ------------------------------------------------------------------------------
+# Dynamic imports
+# This avoids IDE unresolved reference warnings when packages are installed
+# during runtime.
+# ------------------------------------------------------------------------------
+
+pd = importlib.import_module("pandas")
+
+pyodbc = importlib.import_module("pyodbc")
+
+sqlalchemy = importlib.import_module("sqlalchemy")
+
+print("[DEBUG 12] Third-party modules successfully loaded into memory.")
+
+print(f"[DEBUG 13] Pandas version: {pd.__version__}")
+
+print(f"[DEBUG 14] SQLAlchemy version: {sqlalchemy.__version__}")
+
+# ==============================================================================
+# SECTION 2: KEEPASSXC CREDENTIAL MANAGEMENT
+# ==============================================================================
+
+
+def get_credentials_from_cli(db_path, entry_title, master_password):
+
+    print(f"[DEBUG 15] Preparing KeePassXC extraction "
+          f"for entry: '{entry_title}'")
+
+    try:
+
+        cmd_username = [
+            "keepassxc-cli",
+            "show",
+            db_path,
+            entry_title,
+            "-a",
+            "UserName",
+        ]
+
+        cmd_password = [
+            "keepassxc-cli",
+            "show",
+            db_path,
+            entry_title,
+            "-a",
+            "Password",
+        ]
+
+        print("[DEBUG 16] Extracting username from KeePassXC...")
+
+        proc_user = subprocess.Popen(
+            cmd_username,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        username, err_user = proc_user.communicate(
+            input=f"{master_password}\n")
+
+        print(f"[DEBUG 17] Username extraction completed. "
+              f"Return code: {proc_user.returncode}")
+
+        print("[DEBUG 18] Extracting password from KeePassXC...")
+
+        proc_pass = subprocess.Popen(
+            cmd_password,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        password, err_pass = proc_pass.communicate(
+            input=f"{master_password}\n")
+
+        print(f"[DEBUG 19] Password extraction completed. "
+              f"Return code: {proc_pass.returncode}")
+
+        if proc_user.returncode != 0:
+
+            raise RuntimeError(f"Username extraction failed: "
+                               f"{err_user.strip()}")
+
+        if proc_pass.returncode != 0:
+
+            raise RuntimeError(f"Password extraction failed: "
+                               f"{err_pass.strip()}")
+
+        username = username.strip()
+        password = password.strip()
+
+        if not username or not password:
+
+            raise RuntimeError("Retrieved credentials are empty.")
+
+        print("[DEBUG 20] Credentials successfully extracted.")
+
+        return username, password
+
+    except FileNotFoundError:
+
+        print("\n[CRITICAL ERROR] keepassxc-cli executable not found.")
+
+        print("Install KeePassXC and ensure keepassxc-cli "
+              "is available in PATH.")
+
+        sys.exit(1)
+
+    except Exception as e:
+
+        print("\n[CRITICAL ERROR] KeePassXC extraction failed.")
+
+        print(str(e))
+
+        sys.exit(1)
+
+
+def prompt_password_gui(db_name):
+    """
+    Displays secure Windows GUI popup
+    for KeePassXC master password.
+    """
+
+    print("[DEBUG 21] Opening KeePassXC password dialog...")
+
+    root = tk.Tk()
+
+    root.withdraw()
+
+    # Keep popup above all applications
+
+    root.attributes("-topmost", True)
+
+    password = simpledialog.askstring(
+        title="KeePassXC Authentication",
+        prompt=f"Enter Master Password for:\n{db_name}",
+        show="*",
+    )
+
+    root.destroy()
+
+    if not password:
+
+        print("\n[NOTE] Password entry cancelled.")
+
+        sys.exit(0)
+
+    print("[DEBUG 22] Master password captured successfully.")
+
+    return password
+
+
+# ==============================================================================
+# SECTION 3: SQL SERVER CONNECTION USING SQLALCHEMY
+# ==============================================================================
+
+
+def query_local_sql_server(username, password):
+
+    print("[DEBUG 23] Preparing SQLAlchemy SQL Server connection...")
+
+    try:
+
+        from urllib.parse import quote_plus
+
+        # ----------------------------------------------------------------------
+        # Build ODBC connection string
+        # ----------------------------------------------------------------------
+
+        odbc_conn_str = ("DRIVER={ODBC Driver 17 for SQL Server};"
+                         "SERVER=localhost\\SQLEXPRESS;"
+                         "DATABASE=DWConfiguration;"
+                         f"UID={username};"
+                         f"PWD={password};"
+                         "TrustServerCertificate=yes;")
+
+        print("[DEBUG 24] Encoding ODBC connection string...")
+
+        connection_url = ("mssql+pyodbc:///?odbc_connect=" +
+                          quote_plus(odbc_conn_str))
+
+        print("[DEBUG 25] Creating SQLAlchemy engine...")
+
+        engine = sqlalchemy.create_engine(connection_url,
+                                          pool_pre_ping=True,
+                                          future=True)
+
+        query = """
+        SELECT
+             [id]
+            ,[name]
+            ,[address]
+            ,[database]
+            ,[instance]
+            ,[active]
+            ,[index]
+            ,[driveletter]
+        FROM [DWConfiguration].[dbo].[compute_node]
+        """
+
+        print("[DEBUG 26] Opening SQLAlchemy database connection...")
+
+        with engine.connect() as conn:
+
+            print("[DEBUG 27] SQL connection established. "
+                  "Executing query...")
+
+            df = pd.read_sql(sqlalchemy.text(query), conn)
+
+            print(f"[DEBUG 28] Query completed. "
+                  f"Rows retrieved: {len(df)}")
+
+        # ------------------------------------------------------------------
+        # Release pooled connections
+        # ------------------------------------------------------------------
+
+        engine.dispose()
+
+        print("[DEBUG 29] SQLAlchemy engine disposed.")
+
+        return df
+
+    except Exception as e:
+
+        print("\n[CRITICAL ERROR] SQL Server extraction failed.")
+
+        print(f"Error details: {e}")
+
+        sys.exit(1)
+
+
+# ==============================================================================
+# SECTION 4: MAIN EXECUTION WORKFLOW
+# ==============================================================================
+
+try:
+
+    # ----------------------------------------------------------------------
+    # UPDATE THESE VALUES FOR YOUR ENVIRONMENT
+    # ----------------------------------------------------------------------
+
+    KEEPASS_DB_PATH = (r"C:\Swanand\Misc\MyInfo.kdbx")
+
+    SQL_ENTRY_TITLE = ("LocalSQLEXPRESS")
+
+    print(f"[DEBUG 30] KeePass database path: "
+          f"{KEEPASS_DB_PATH}")
+
+    print(f"[DEBUG 31] KeePass entry name: "
+          f"{SQL_ENTRY_TITLE}")
+
+    # ----------------------------------------------------------------------
+    # Validate KeePass database file
+    # ----------------------------------------------------------------------
+
+    print("[DEBUG 32] Checking KeePass database existence...")
+
+    if not os.path.exists(KEEPASS_DB_PATH):
+
+        print("\n[CRITICAL ERROR] KeePass database file "
+              "does not exist.")
+
+        print(KEEPASS_DB_PATH)
+
+        sys.exit(1)
+
+    print("[DEBUG 33] KeePass database file verified.")
+
+    # ----------------------------------------------------------------------
+    # Request KeePass master password
+    # ----------------------------------------------------------------------
+
+    db_filename = os.path.basename(KEEPASS_DB_PATH)
+
+    vault_password = prompt_password_gui(db_filename)
+
+    # ----------------------------------------------------------------------
+    # Extract SQL Server credentials
+    # ----------------------------------------------------------------------
+
+    print("[DEBUG 34] Extracting database credentials...")
+
+    db_user, db_pass = get_credentials_from_cli(KEEPASS_DB_PATH,
+                                                SQL_ENTRY_TITLE,
+                                                vault_password)
+
+    print(f"[DEBUG 35] Database user retrieved: {db_user}")
+
+    # ----------------------------------------------------------------------
+    # Execute SQL extraction
+    # ----------------------------------------------------------------------
+
+    print("[DEBUG 36] Starting SQL data extraction...")
+
+    df_compute_nodes = query_local_sql_server(db_user, db_pass)
+
+    # ----------------------------------------------------------------------
+    # Display result
+    # ----------------------------------------------------------------------
+
+    print("\n[DEBUG 37] Extraction completed successfully.")
+
+    print("[DEBUG 38] Displaying first 5 records:")
+
+    print(df_compute_nodes.head())
+
+except KeyboardInterrupt:
+
+    print("\n[NOTE] Execution interrupted by user.")
+
+    sys.exit(0)
+
+except Exception as e:
+
+    print("\n[CRITICAL ERROR] Unexpected failure.")
+
+    print(f"Details: {e}")
+
+    sys.exit(1)
